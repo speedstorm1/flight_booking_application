@@ -5,6 +5,9 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * Runs queries against a back-end database
@@ -15,7 +18,10 @@ public class Query extends QueryAbstract {
   //
   private static final String FLIGHT_CAPACITY_SQL = "SELECT capacity FROM Flights WHERE fid = ?";
   private PreparedStatement flightCapacityStmt;
-
+  private String currentUser;
+  private ResultSet currentDirectSearchResults;
+  private ResultSet currentIndirectSearchResults;
+  private int currentSearchSize;
   //
   // Instance variables
   //
@@ -30,9 +36,16 @@ public class Query extends QueryAbstract {
    * 
    * WARNING! Do not drop any tables and do not clear the flights table.
    */
+
+   /* DO I need to change this exception to sql exception? should i throw anything QUESTION */
   public void clearTables() {
     try {
-      // TODO: YOUR CODE HERE
+      String clearReservationsTable = "DELETE FROM RESERVATIONS_ayush123";
+      PreparedStatement deleteReservationsStatement = conn.prepareStatement(clearReservationsTable);
+      deleteReservationsStatement.executeUpdate();
+      String clearUsersTable = "DELETE FROM USERS_ayush123";
+      PreparedStatement deleteUsersStatement = conn.prepareStatement(clearUsersTable);
+      deleteUsersStatement.executeUpdate();
     } catch (Exception e) {
       e.printStackTrace();
     }
@@ -58,7 +71,31 @@ public class Query extends QueryAbstract {
    */
   public String transaction_login(String username, String password) {
     // TODO: YOUR CODE HERE
-    return "Login failed\n";
+    // first use controlled queries to retrieve salthash password from the table
+    // then verify the password with the salt and hash
+    // if its correct, then if the user is already logged in, then do user already log in
+    // else log in the user and change your current user
+    String fetchUser = "SELECT * FROM USERS_ayush123 WHERE username = ?";
+    try {
+      PreparedStatement statement = conn.prepareStatement(fetchUser);
+      // System.out.println("made it this far");
+      statement.setString(1, username);
+      ResultSet resultSet = statement.executeQuery();
+      resultSet.next();
+      byte[] hashedPasswordTrue = resultSet.getBytes("password");
+      // System.out.println(Arrays.toString(hashedPasswordTrue));
+      if (!PasswordUtils.plaintextMatchesHash(password, hashedPasswordTrue)) { // wrong login
+        return "Login failed\n";
+      }
+      if (currentUser != null) {
+        return "User already logged in\n";
+      }
+      currentUser = username;
+      return ("Logged in as " + username + "\n");
+    } catch (SQLException e) {
+   //   e.printStackTrace();
+      return "Login failed\n";
+    }
   }
 
   /**
@@ -71,9 +108,27 @@ public class Query extends QueryAbstract {
    *
    * @return either "Created user {@code username}\n" or "Failed to create user\n" if failed.
    */
+
+   /*QUESTION How to hash the password */
   public String transaction_createCustomer(String username, String password, int initAmount) {
     // TODO: YOUR CODE HERE
-    return "Failed to create user\n";
+    try {
+      if (initAmount < 0) {
+        throw new SQLException();
+      }
+      String createCustomer = "INSERT INTO USERS_ayush123 VALUES( ? , ? , ? );";
+      PreparedStatement customerCreationStatement = conn.prepareStatement(createCustomer);
+      customerCreationStatement.setString(1, username);
+      customerCreationStatement.setBytes(2, PasswordUtils.hashPassword(password));
+      // customerCreationStatement.setString(2, password);
+      customerCreationStatement.setInt(3, initAmount);
+      customerCreationStatement.executeUpdate();
+    } catch (SQLException e) {
+      e.printStackTrace();
+      return "Failed to create user\n";
+    }
+    return ("Created user " + username + "\n");
+    
   }
 
   /**
@@ -118,37 +173,114 @@ public class Query extends QueryAbstract {
     StringBuffer sb = new StringBuffer();
 
     try {
-      // one hop itineraries
-      String unsafeSearchSQL = "SELECT TOP (" + numberOfItineraries
-        + ") day_of_month,carrier_id,flight_num,origin_city,dest_city,actual_time,capacity,price "
-        + "FROM Flights " + "WHERE origin_city = \'" + originCity + "\' AND dest_city = \'"
-        + destinationCity + "\' AND day_of_month =  " + dayOfMonth + " "
-        + "ORDER BY actual_time ASC";
+  //  if (directFlight) {
+      String directSearchStatement = "SELECT TOP ( ? ) fid,day_of_month,carrier_id,flight_num,origin_city,dest_city,actual_time,capacity,price "
+        + "FROM Flights " + "WHERE origin_city = ? AND dest_city = ? AND canceled != 1"
+        + "AND day_of_month = ? "
+        + "ORDER BY actual_time ASC;";
+      PreparedStatement preparedDirectSearch = conn.prepareStatement(directSearchStatement);
+      preparedDirectSearch.setInt(1, numberOfItineraries);
+      preparedDirectSearch.setString(2, originCity);
+      preparedDirectSearch.setString(3, destinationCity);
+      preparedDirectSearch.setInt(4, dayOfMonth);
+      ResultSet oneHopResults = preparedDirectSearch.executeQuery();
+      List<Itinerary> searchResults = new ArrayList<>();
 
-      Statement searchStatement = conn.createStatement();
-      ResultSet oneHopResults = searchStatement.executeQuery(unsafeSearchSQL);
+      if (directFlight) {
+        while (oneHopResults.next()) {
+          int result_fid = oneHopResults.getInt("fid");
+          int result_dayOfMonth = oneHopResults.getInt("day_of_month");
+          String result_carrierId = oneHopResults.getString("carrier_id");
+          String result_flightNum = oneHopResults.getString("flight_num");
+          String result_originCity = oneHopResults.getString("origin_city");
+          String result_destCity = oneHopResults.getString("dest_city");
+          int result_time = oneHopResults.getInt("actual_time");
+          int result_capacity = oneHopResults.getInt("capacity");
+          int result_price = oneHopResults.getInt("price");
+          Itinerary newItinerary = new Itinerary(1);
+          newItinerary.f1 = new Flight(result_fid, result_dayOfMonth, result_carrierId, result_flightNum, 
+                                       result_originCity, result_destCity, result_time, result_capacity, result_price);
+          searchResults.add(newItinerary);
+          // sb.append("Day: " + result_dayOfMonth + " Carrier: " + result_carrierId + " Number: "
+          //           + result_flightNum + " Origin: " + result_originCity + " Destination: "
+          //           + result_destCity + " Duration: " + result_time + " Capacity: " + result_capacity
+          //           + " Price: " + result_price + "\n");
+        }
+        this.currentIndirectSearchResults = null;
+        currentSearchSize = 1;
+      } else {
+        String indirectSearchStatement = "SELECT TOP ( ? ) f1.day_of_month as day_of_month,f1.carrier_id as f1_carrier_id,f1.flight_num as f1_flight_num,"
+          + "f2.flight_num as f2_flight_num, f1.origin_city as f1_origin_city, f2.dest_city as f2_dest_city, f2.carrier_id as f2_carrier_id,"
+          + "f2.origin_city as intermediate_city, f1.actual_time as f1_actual_time, f2.actual_time as f2_actual_time,"
+          + "f1.capacity as f1_capacity, f2.capacity as f2_capacity, f1.price as f1_price, f2.price as f2_price,"
+          + " f1.fid as f1_fid, f2.fid as f2_fid "
+          + "FROM Flights as f1, Flights as f2" + "WHERE f1.origin_city = ? AND f1.canceled != 1 AND f1.day_of_month = ? "
+          + "AND f2.day_of_month = ? AND f1.dest_city = f2.origin_city "
+          + "AND f2.dest_city = ? and f2.canceled != 1 "
+          + "ORDER BY (f1.actual_time + f2.actual_time) ASC;";
+        PreparedStatement preparedIndirectSearch = conn.prepareStatement(indirectSearchStatement);
+        preparedIndirectSearch.setInt(1, numberOfItineraries);
+        preparedIndirectSearch.setString(2, originCity);
+        preparedIndirectSearch.setInt(3, dayOfMonth);
+        preparedIndirectSearch.setString(4, destinationCity);
+        ResultSet twoHopResults = preparedIndirectSearch.executeQuery();
+        // check to make sure two hop results are valid
+        if (twoHopResults.isAfterLast()) {
+          // do direct flight commands
+          // return
+        } 
+        oneHopResults.next();
+        twoHopResults.next();
+        for (int i = 0; i < numberOfItineraries; i++) {
+          if (twoHopResults.isAfterLast()) {
+            while (i < numberOfItineraries) {
+              // loop from i -> num itineraries for single hop results and break
+            }
+          }
+          if (oneHopResults.isAfterLast()) {
+            while (i < numberOfItineraries) {
+              // loop from i -> num itineraries for two hop results and break
+            }
+          }
+          int oneHopTime = oneHopResults.getInt("actual_time");
+          int twoHopTime = twoHopResults.getInt("f1_actual_time") + twoHopResults.getInt("f2_actual_time");
+      //    if (oneHopTime > )
+        }
 
-      while (oneHopResults.next()) {
-        int result_dayOfMonth = oneHopResults.getInt("day_of_month");
-        String result_carrierId = oneHopResults.getString("carrier_id");
-        String result_flightNum = oneHopResults.getString("flight_num");
-        String result_originCity = oneHopResults.getString("origin_city");
-        String result_destCity = oneHopResults.getString("dest_city");
-        int result_time = oneHopResults.getInt("actual_time");
-        int result_capacity = oneHopResults.getInt("capacity");
-        int result_price = oneHopResults.getInt("price");
 
-        sb.append("Day: " + result_dayOfMonth + " Carrier: " + result_carrierId + " Number: "
-                  + result_flightNum + " Origin: " + result_originCity + " Destination: "
-                  + result_destCity + " Duration: " + result_time + " Capacity: " + result_capacity
-                  + " Price: " + result_price + "\n");
+
+
+
+        currentSearchSize = 2;
+        twoHopResults.beforeFirst();
       }
-      oneHopResults.close();
+
+      oneHopResults.beforeFirst();
+
+      this.currentSearchSize = numberOfItineraries;
+
+
+
+
     } catch (SQLException e) {
       e.printStackTrace();
     }
 
     return sb.toString();
+  }
+
+
+  private String currentItinerary(Itinerary currentItinerary, int index) {
+    String result = "";
+    result += ("Itinerary " + index + ": " + currentItinerary.numFlights + " flight(s), ");
+    result += (currentItinerary.totalTime() + " minutes" + "\n");
+    result += currentItinerary.f1.toString();
+    result += "\n";
+    if (currentItinerary.numFlights == 2) {
+      result += currentItinerary.f2.toString();
+      result += "\n";
+    }
+    return result;
   }
 
   /**
@@ -273,4 +405,58 @@ public class Query extends QueryAbstract {
           + " Capacity: " + capacity + " Price: " + price;
     }
   }
+
+  public class Itinerary implements Comparable<Itinerary> {
+    public int numFlights;
+    public Flight f1;
+    public Flight f2;
+
+    public Itinerary(int numFlights) {
+      this.numFlights = numFlights;
+    }
+
+    public int totalTime() {
+      if (this.numFlights == 1) {
+        return f1.time; 
+      } else {
+        return f1.time + f2.time;
+      }
+    }
+
+    public int compareTo(Itinerary other) {
+      int thisTime;
+      int otherTime;
+      boolean thisDirect;
+      boolean otherDirect;
+
+      if (this.numFlights == 1) {
+        thisTime = f1.time; 
+        thisDirect = true;
+      } else {
+        thisTime = f1.time + f2.time;
+        thisDirect = false;
+      }
+      if (other.numFlights == 1) {
+        otherTime = other.f1.time; 
+        otherDirect = true;
+      } else {
+        otherTime = other.f1.time + other.f2.time;
+        otherDirect = false;
+      }
+      if (thisTime > otherTime) {
+        return 1;
+      }
+      if (thisTime < otherTime) {
+        return -1;
+      }
+      if (thisDirect && !otherDirect) {
+        return 1;
+      }
+      if (!thisDirect && otherDirect) {
+        return -1;
+      }
+      return 1;
+    }
+  }
 }
+

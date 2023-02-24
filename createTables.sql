@@ -37,27 +37,19 @@
 --          day_of_week varchar(9));
 
 CREATE TABLE USERS_ayush123 (
-    username varchar(20) primary key,
-    password varbinary(20),
-    balance int
+    username varchar(20) primary key NOT NULL,
+    password varbinary(144) NOT NULL,
+    balance int NOT NULL
 );
-
-
-CREATE TABLE ITINERARIES_ayush123 (
-    itineraryid int primary key,
-    fid1 int,
-    fid2 int,
-    FOREIGN KEY (fid1) REFERENCES FLIGHTS(fid),
-    FOREIGN KEY (fid2) REFERENCES FLIGHTS(fid)
-);
-
 
 CREATE TABLE RESERVATIONS_ayush123 (
-    id int primary key,
-    username varchar(20),
-    ispaid int,
-    itineraryid int,
-    FOREIGN KEY (itineraryid) references ITINERARIES_ayush123(itineraryid),
+    id int primary key NOT NULL,
+    username varchar(20) NOT NULL,
+    ispaid int NOT NULL,
+    fid1 int NOT NULL,
+    fid2 int,
+    FOREIGN KEY (fid1) REFERENCES FLIGHTS(fid),
+    FOREIGN KEY (fid2) REFERENCES FLIGHTS(fid),
     FOREIGN KEY (username) REFERENCES USERS_ayush123(username),
 );
 

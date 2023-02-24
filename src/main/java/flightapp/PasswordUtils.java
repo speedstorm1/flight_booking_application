@@ -7,7 +7,7 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 import java.util.Properties;
-
+import java.util.*;
 import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 
@@ -22,10 +22,14 @@ public class PasswordUtils {
   public static byte[] hashPassword(String password) {
     byte[] salt = generateSalt();
     byte[] saltedHash = generateSaltedPassword(password, salt);
-
-    // TODO: combine the salt and the salted hash into a single byte array that
-    // can be written to the database
-    return null;
+    byte[] returnArray = new byte[salt.length + saltedHash.length];
+    for (int i = 0; i < salt.length; i++) {
+      returnArray[i] = salt[i];
+    }
+    for (int i = salt.length; i < returnArray.length; i++) {
+      returnArray[i] = saltedHash[i - salt.length];
+    }
+    return returnArray;
   }
 
   /**
@@ -35,7 +39,18 @@ public class PasswordUtils {
     // TODO: extract the salt from the byte array (i.e., undo the logic implemented in 
     // hashPassword), then use the salt to salt the plaintext and check whether
     // it matches the password hash.
-    return false;
+    byte[] salt = new byte[SALT_LENGTH];
+    for (int i = 0; i < salt.length; i++) {
+      salt[i] = saltedHashed[i];
+    }
+    byte[] newSaltedHash = generateSaltedPassword(plaintext, salt);
+    for (int i = salt.length; i < saltedHashed.length; i++) {
+      if (saltedHashed[i] != newSaltedHash[i - salt.length]) {
+        return false;
+      }
+    }
+//    byte[] newSaltedHash = ge
+    return true;
   }
   
   // Password hashing parameter constants.
@@ -49,6 +64,8 @@ public class PasswordUtils {
   static byte[] generateSalt() {
     // TODO: implement this.
     byte[] salt = new byte[SALT_LENGTH];
+    Random r = new Random();
+    r.nextBytes(salt);
     return salt;
   }
 
