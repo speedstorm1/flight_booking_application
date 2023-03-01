@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.sql.Types;
 
 import javax.naming.spi.DirStateFactory.Result;
 
@@ -87,6 +88,7 @@ public class Query extends QueryAbstract {
       ResultSet resultSet = statement.executeQuery();
       resultSet.next();
       byte[] hashedPasswordTrue = resultSet.getBytes("password");
+      resultSet.close();
       // System.out.println(Arrays.toString(hashedPasswordTrue));
       if (!PasswordUtils.plaintextMatchesHash(password, hashedPasswordTrue)) { // wrong login
         return "Login failed\n";
@@ -209,6 +211,7 @@ public class Query extends QueryAbstract {
                                       result_originCity, result_destCity, result_time, result_capacity, result_price);
         searchResults.add(newItinerary);
       }
+      oneHopResults.close();
       if (!directFlight) {
         String indirectSearchStatement = "SELECT TOP ( ? ) f1.day_of_month as day_of_month,f1.carrier_id as f1_carrier_id,f1.flight_num as f1_flight_num,"
           + "f2.flight_num as f2_flight_num, f1.origin_city as f1_origin_city, f2.dest_city as f2_dest_city, f2.carrier_id as f2_carrier_id,"
@@ -249,6 +252,7 @@ public class Query extends QueryAbstract {
                                        intermediate_city, f2_destCity, f2_actual_time, f2_capacity, f2_price);
           searchResults.add(newItinerary);
         }
+        twoHopResults.close();
       }
       int oldSize = searchResults.size();
       if (oldSize == 0) {
@@ -302,7 +306,74 @@ public class Query extends QueryAbstract {
    */
   public String transaction_book(int itineraryId) {
     // TODO: YOUR CODE HERE
-    return "Booking failed\n";
+    if (currentUser == null) {
+      return "Cannot book reservations, not logged in\n";
+    }
+    if (searchResults == null || itineraryId >= searchResults.size()) {
+      return "No such itinerary " + itineraryId + "\n";
+    }
+    try {
+      Itinerary desiredItinerary = searchResults.get(itineraryId);
+      String checkFlight1Reservations = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R WHERE R.fid1 = ? ;";
+      PreparedStatement flight1ReservationStatement = conn.prepareStatement(checkFlight1Reservations);
+      flight1ReservationStatement.setInt(1, desiredItinerary.f1.fid);
+      ResultSet flight1ReservationSet = flight1ReservationStatement.executeQuery();
+      flight1ReservationSet.next();
+      int numReservationsf1 = flight1ReservationSet.getInt("count");
+      flight1ReservationSet.close();
+      if (desiredItinerary.f1.capacity <= numReservationsf1) {
+        return "Booking failed\n";
+      }
+
+      if (desiredItinerary.numFlights == 2) {
+        String checkFlight2Reservations = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R WHERE R.fid2 = ? ;";
+        PreparedStatement flight2ReservationStatement = conn.prepareStatement(checkFlight2Reservations);
+        flight2ReservationStatement.setInt(1, desiredItinerary.f2.fid);
+        ResultSet flight2ReservationSet = flight2ReservationStatement.executeQuery();
+        flight2ReservationSet.next();
+        int numReservationsf2 = flight2ReservationSet.getInt("count");
+        flight2ReservationSet.close();
+        if (desiredItinerary.f2.capacity <= numReservationsf2) {
+          return "Booking failed\n";
+        }
+      }
+
+      int flightDay = desiredItinerary.f1.dayOfMonth;
+      String checkReservationDay = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R, Flights as F WHERE " +
+                                    "R.fid1 = F.fid AND F.day_of_month = ? and R.username = ? ;";
+      PreparedStatement reservationCheckStatement = conn.prepareStatement(checkReservationDay);
+      reservationCheckStatement.setInt(1, flightDay);
+      reservationCheckStatement.setString(2, currentUser);
+      ResultSet numReservationsOnDaySet = reservationCheckStatement.executeQuery();
+      numReservationsOnDaySet.next();
+      int numReservations = numReservationsOnDaySet.getInt("count");
+      numReservationsOnDaySet.close();
+      if (numReservations != 0) {
+        return "You cannot book two flights in the same day\n";
+      }
+
+      String checkNumReservations = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R;";
+      PreparedStatement numReservationsStatement = conn.prepareStatement(checkNumReservations);
+      ResultSet numUserReservationsSet = numReservationsStatement.executeQuery();
+      numUserReservationsSet.next();
+      int reservationIndex = numUserReservationsSet.getInt("count") + 1;
+      numUserReservationsSet.close();
+      String createReservation = "INSERT INTO RESERVATIONS_ayush123 VALUES( ? , ? , ? , ? , ? );";
+      PreparedStatement createReservationStatement = conn.prepareStatement(createReservation);
+      createReservationStatement.setInt(1, reservationIndex);
+      createReservationStatement.setString(2, currentUser);
+      createReservationStatement.setInt(3, 0);
+      createReservationStatement.setInt(4, desiredItinerary.f1.fid);
+      if (desiredItinerary.numFlights == 1) {
+        createReservationStatement.setNull(5, Types.INTEGER);
+      } else {
+        createReservationStatement.setInt(5, desiredItinerary.f2.fid);
+      }
+      createReservationStatement.executeUpdate();
+      return "Booked flight(s), reservation ID: " + reservationIndex + "\n";
+    } catch (Exception e) {
+      return "Booking failed\n";
+    }
   }
 
   /**
@@ -322,7 +393,78 @@ public class Query extends QueryAbstract {
    */
   public String transaction_pay(int reservationId) {
     // TODO: YOUR CODE HERE
-    return "Failed to pay for reservation " + reservationId + "\n";
+    if (currentUser == null) {
+      return "Cannot pay, not logged in\n";
+    }
+    try {
+      String verifyReservation = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R WHERE R.id = ? AND R.username = ? AND R.ispaid = ?;";
+      PreparedStatement verifyReservationStatement = conn.prepareStatement(verifyReservation);
+      verifyReservationStatement.setInt(1, reservationId);
+      verifyReservationStatement.setString(2, currentUser);
+      verifyReservationStatement.setInt(3, 0);
+      ResultSet reservationVerificationSet = verifyReservationStatement.executeQuery();
+      reservationVerificationSet.next();
+      int reservationExists = reservationVerificationSet.getInt("count");
+      reservationVerificationSet.close();
+      if (reservationExists == 0) {
+        return "Cannot find unpaid reservation " + reservationId + " under user: " + currentUser + "\n";
+      }
+      // get flights
+      String getReservationFlights = "SELECT R.fid1 as fid1, R.fid2 as fid2 FROM RESERVATIONS_ayush123 as R WHERE R.id = ? ;";
+      PreparedStatement getFlightsStatement = conn.prepareStatement(getReservationFlights);
+      getFlightsStatement.setInt(1, reservationId);
+      ResultSet flightInfoSet = getFlightsStatement.executeQuery();
+      flightInfoSet.next();
+      int fid1 = flightInfoSet.getInt("fid1");
+      int fid2 = flightInfoSet.getInt("fid2"); // 0 if direct itinerary
+      // get flight costs
+      flightInfoSet.close();
+      String getFlight1Cost = "SELECT F.price as price from Flights as F where fid = ? ;";
+      PreparedStatement getFlight1CostStatement = conn.prepareStatement(getFlight1Cost);
+      getFlight1CostStatement.setInt(1, fid1);
+      ResultSet flight1CostSet = getFlight1CostStatement.executeQuery();
+      flight1CostSet.next();
+      int itineraryCost = flight1CostSet.getInt("price");
+      flight1CostSet.close();
+      if (fid2 != 0) { // 2 flight itinerary
+        String getFlight2Cost = "SELECT F.price as price from Flights as F where fid = ? ;";
+        PreparedStatement getFlight2CostStatement = conn.prepareStatement(getFlight2Cost);
+        getFlight2CostStatement.setInt(1, fid2);
+        ResultSet flight2CostSet = getFlight2CostStatement.executeQuery();
+        flight2CostSet.next();
+        itineraryCost += flight2CostSet.getInt("price");
+        flight2CostSet.close();
+      }
+      // get user balance
+      String getUserBalance = "SELECT U.balance as balance FROM USERS_ayush123 as U WHERE U.username = ? ;";
+      PreparedStatement getUserBalanceStatement = conn.prepareStatement(getUserBalance);
+      getUserBalanceStatement.setString(1, currentUser);
+      ResultSet userBalanceSet = getUserBalanceStatement.executeQuery();
+      userBalanceSet.next();
+      int userBalance = userBalanceSet.getInt("balance");
+      userBalanceSet.close();
+      if (userBalance < itineraryCost) {
+        return "User has only " + userBalance + " in account but itinerary costs " + itineraryCost + "\n";
+      }
+
+      // update user balance and pay for reservation
+      userBalance -= itineraryCost;
+      String updateUserBalance = "UPDATE USERS_ayush123 SET balance = ? WHERE username = ? ;";
+      PreparedStatement updateUserBalanceStatement =  conn.prepareStatement(updateUserBalance);
+      updateUserBalanceStatement.setInt(1, userBalance);
+      updateUserBalanceStatement.setString(2, currentUser);
+      updateUserBalanceStatement.executeUpdate();
+
+      String updateReservationPayment = "UPDATE RESERVATIONS_ayush123 SET ispaid = ? WHERE id = ? ;";
+      PreparedStatement updateReservationPaymentStatement = conn.prepareStatement(updateReservationPayment);
+      updateReservationPaymentStatement.setInt(1, 1);
+      updateReservationPaymentStatement.setInt(2, reservationId);
+      updateReservationPaymentStatement.executeUpdate();
+
+      return "Paid reservation: " + reservationId + " remaining balance: " + userBalance + "\n";
+    } catch (Exception e) {
+      return "Failed to pay for reservation " + reservationId + "\n";
+    }
   }
 
   /**
@@ -344,8 +486,76 @@ public class Query extends QueryAbstract {
    * @see Flight#toString()
    */
   public String transaction_reservations() {
-    // TODO: YOUR CODE HERE
-    return "Failed to retrieve reservations\n";
+    if (currentUser == null) {
+      return "Cannot view reservations, not logged in\n";
+    }
+    try {
+      String getNumReservations = "SELECT count(id) as count FROM RESERVATIONS_ayush123 WHERE username = ? ;";
+      PreparedStatement getNumReservationsStatement = conn.prepareStatement(getNumReservations);
+      getNumReservationsStatement.setString(1, currentUser);
+      ResultSet numReservationsSet = getNumReservationsStatement.executeQuery();
+      numReservationsSet.next();
+      int numReservations = numReservationsSet.getInt("count");
+      numReservationsSet.close();
+      if (numReservations == 0) {
+        return "No reservations found\n";
+      }
+
+      String getReservations = "SELECT id, ispaid, fid1, fid2 FROM RESERVATIONS_ayush123 WHERE username = ? ORDER BY id;";
+      PreparedStatement getReservationsStatement = conn.prepareStatement(getReservations);
+      getReservationsStatement.setString(1, currentUser);
+      ResultSet userReservations = getReservationsStatement.executeQuery();
+      String reservations = "";
+      while (userReservations.next()) {
+        int fid1 = userReservations.getInt("fid1");
+        int fid2 = userReservations.getInt("fid2");
+        int reservationId = userReservations.getInt("id");
+        int ispaid = userReservations.getInt("ispaid");
+        Flight flight1 = getFlight(fid1);
+        Flight flight2 = getFlight(fid2);
+        reservations += printReservation(flight1, flight2, reservationId, ispaid);
+      }
+      userReservations.close();
+      return reservations;
+    } catch(Exception e) {
+      return "Failed to retrieve reservations\n";
+    }
+  }
+
+  private Flight getFlight(int fid) throws SQLException {
+    if (fid == 0) {
+      return null;
+    }
+    String getFlightValues = "SELECT day_of_month,carrier_id,flight_num,origin_city,dest_city,actual_time,capacity,price " +
+                              "FROM Flights WHERE fid = ? ;";
+    PreparedStatement getFlightStatement = conn.prepareStatement(getFlightValues);
+    getFlightStatement.setInt(1, fid);
+    ResultSet flightDetails = getFlightStatement.executeQuery();
+    flightDetails.next();
+    int flight_dayOfMonth = flightDetails.getInt("day_of_month");
+    String flight_carrierId = flightDetails.getString("carrier_id");
+    String flight_flightNum = flightDetails.getString("flight_num");
+    String flight_originCity = flightDetails.getString("origin_city");
+    String flight_destCity = flightDetails.getString("dest_city");
+    int flight_time = flightDetails.getInt("actual_time");
+    int flight_capacity = flightDetails.getInt("capacity");
+    int flight_price = flightDetails.getInt("price");
+    Flight currentFlight = new Flight(fid, flight_dayOfMonth, flight_carrierId, flight_flightNum, 
+                                      flight_originCity, flight_destCity, flight_time, flight_capacity, flight_price);
+    return currentFlight;
+  }
+
+  private String printReservation(Flight flight1, Flight flight2, int reservationId, int ispaid) {
+    String result = "";
+    String paidBoolean = ispaid == 1 ? "true" : "false";
+    result += ("Reservation " + reservationId + " paid: " + paidBoolean + ":\n");
+    result += flight1.toString();
+    result += "\n";
+    if (flight2 != null) {
+      result += flight2.toString();
+      result += "\n";
+    }
+    return result;
   }
 
   /**

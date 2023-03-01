@@ -50,6 +50,6 @@ CREATE TABLE RESERVATIONS_ayush123 (
     fid2 int,
     FOREIGN KEY (fid1) REFERENCES FLIGHTS(fid),
     FOREIGN KEY (fid2) REFERENCES FLIGHTS(fid),
-    FOREIGN KEY (username) REFERENCES USERS_ayush123(username),
+    FOREIGN KEY (username) REFERENCES USERS_ayush123(username)
 );
 
