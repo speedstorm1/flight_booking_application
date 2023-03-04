@@ -183,7 +183,9 @@ public class Query extends QueryAbstract {
     // to use JDBC; you are required to replace it with your own secure implementation.
 
     String result = "";
-
+    if (numberOfItineraries == 0) {
+      return "Failed to search\n";
+    }
     try {
       String directSearchStatement = "SELECT TOP ( ? ) fid,day_of_month,carrier_id,flight_num,origin_city,dest_city,actual_time,capacity,price "
         + "FROM Flights " + "WHERE origin_city = ? AND dest_city = ? AND canceled != 1"
@@ -462,7 +464,7 @@ public class Query extends QueryAbstract {
       updateReservationPaymentStatement.executeUpdate();
 
       return "Paid reservation: " + reservationId + " remaining balance: " + userBalance + "\n";
-    } catch (Exception e) {
+    } catch (SQLException e) {
       return "Failed to pay for reservation " + reservationId + "\n";
     }
   }
