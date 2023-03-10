@@ -1,0 +1,18 @@
+# Tag for test harness; can print failures to stdout:
+#   public_test_case
+#
+# commands:
+create user1 user1 10000
+login user1 user1
+search "Tupelo MS" "Hayden CO" 0 1 15
+book 25
+quit
+*
+#
+# expected command output:
+Created user user1
+Logged in as user1
+No flights match your selection
+No such itinerary 25
+Goodbye
+*
