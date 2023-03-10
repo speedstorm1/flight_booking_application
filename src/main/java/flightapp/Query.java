@@ -13,6 +13,7 @@ import java.sql.Types;
 
 import javax.naming.spi.DirStateFactory.Result;
 
+
 /**
  * Runs queries against a back-end database
  */
@@ -81,6 +82,7 @@ public class Query extends QueryAbstract {
     // else log in the user and change your current user
     String fetchUser = "SELECT * FROM USERS_ayush123 WHERE username = ?";
     try {
+      conn.setAutoCommit(false);
       PreparedStatement statement = conn.prepareStatement(fetchUser);
       // System.out.println("made it this far");
       username = username.toLowerCase();
@@ -91,16 +93,33 @@ public class Query extends QueryAbstract {
       resultSet.close();
       // System.out.println(Arrays.toString(hashedPasswordTrue));
       if (!PasswordUtils.plaintextMatchesHash(password, hashedPasswordTrue)) { // wrong login
+        conn.rollback();
+        conn.setAutoCommit(true);
+
         return "Login failed\n";
       }
       if (currentUser != null) {
+        conn.rollback();
+
+        conn.setAutoCommit(true);
+
         return "User already logged in\n";
       }
       currentUser = username;
+      conn.commit();
+      conn.setAutoCommit(true);
+
       return ("Logged in as " + username + "\n");
     } catch (SQLException e) {
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+        return "Login failed\n";
+      } catch (Exception ex) {
+        return "Login failed\n";
+      }
    //   e.printStackTrace();
-      return "Login failed\n";
+     // return "Login failed\n";
     }
   }
 
@@ -118,30 +137,59 @@ public class Query extends QueryAbstract {
   public String transaction_createCustomer(String username, String password, int initAmount) {
     try {
       if (initAmount < 0) {
-        throw new SQLException();
+        return "Failed to create user\n";
       }
-      // check to see if user exists
+
+      // Set Up Statements
+
+        // check to see if user exists
       username = username.toLowerCase();
       String checkUserExists = "SELECT COUNT(*) as count FROM USERS_ayush123 WHERE EXISTS " + "(SELECT * FROM USERS_ayush123 WHERE username = ?);";
       PreparedStatement userExistingStatement = conn.prepareStatement(checkUserExists);
       userExistingStatement.setString(1, username);
-      ResultSet userExistingSet = userExistingStatement.executeQuery();
-      userExistingSet.next();
-      int numUsers = userExistingSet.getInt("count");
-      userExistingSet.close();
-      if (numUsers != 0) { // user already in the database
-        throw new SQLException();
-      }
+
       String createCustomer = "INSERT INTO USERS_ayush123 VALUES( ? , ? , ? );";
       PreparedStatement customerCreationStatement = conn.prepareStatement(createCustomer);
       customerCreationStatement.setString(1, username);
       customerCreationStatement.setBytes(2, PasswordUtils.hashPassword(password));
       customerCreationStatement.setInt(3, initAmount);
+
+      conn.setAutoCommit(false);
+      ResultSet userExistingSet = userExistingStatement.executeQuery();
+      userExistingSet.next();
+      int numUsers = userExistingSet.getInt("count");
+      userExistingSet.close();
+      if (numUsers != 0) { // user already in the database
+        //throw new SQLException("User already in database");
+        conn.rollback();
+
+        conn.setAutoCommit(true);
+
+       return "Failed to create user\n";
+        // return "test";
+      }
       customerCreationStatement.executeUpdate();
+      conn.commit();
+      conn.setAutoCommit(true);
+      return ("Created user " + username + "\n");
     } catch (SQLException e) {
-      return "Failed to create user\n";
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+        if (isDeadlock(e)) {
+          return transaction_createCustomer(username, password, initAmount);
+        }
+        return "Failed to create user\n";
+      } catch (SQLException ex) {
+        // try {
+        //   conn.rollback();
+        //   conn.setAutoCommit(true);
+          return "Failed to create user\n";
+        // } catch (SQLException exc) {
+        //   return "Failed to create user\n";
+        // }
+      }
     }
-    return ("Created user " + username + "\n");
     
   }
 
@@ -187,6 +235,7 @@ public class Query extends QueryAbstract {
       return "Failed to search\n";
     }
     try {
+      conn.setAutoCommit(false);
       String directSearchStatement = "SELECT TOP ( ? ) fid,day_of_month,carrier_id,flight_num,origin_city,dest_city,actual_time,capacity,price "
         + "FROM Flights " + "WHERE origin_city = ? AND dest_city = ? AND canceled != 1"
         + "AND day_of_month = ? "
@@ -258,6 +307,8 @@ public class Query extends QueryAbstract {
       }
       int oldSize = searchResults.size();
       if (oldSize == 0) {
+        conn.rollback();
+        conn.setAutoCommit(true);
         return "No flights match your selection\n";
       }
       for (int index = numberOfItineraries; index < oldSize; index++) {
@@ -268,10 +319,18 @@ public class Query extends QueryAbstract {
       for (int i = 0; i < searchResults.size(); i++) {
         result += currentItinerary(searchResults.get(i), i);
       }
-    } catch (Exception e) {
-      return "Failed to search\n";
+      conn.commit();
+      conn.setAutoCommit(true);
+      return result;
+    } catch (SQLException e) {
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+        return "Failed to search\n";
+      } catch (SQLException ex) {
+        return "Failed to search\n";
+      }
     }
-    return result;
   }
 
 
@@ -314,31 +373,20 @@ public class Query extends QueryAbstract {
     if (searchResults == null || itineraryId >= searchResults.size()) {
       return "No such itinerary " + itineraryId + "\n";
     }
+
     try {
       Itinerary desiredItinerary = searchResults.get(itineraryId);
+      
+      
       String checkFlight1Reservations = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R WHERE R.fid1 = ? ;";
       PreparedStatement flight1ReservationStatement = conn.prepareStatement(checkFlight1Reservations);
       flight1ReservationStatement.setInt(1, desiredItinerary.f1.fid);
-      ResultSet flight1ReservationSet = flight1ReservationStatement.executeQuery();
-      flight1ReservationSet.next();
-      int numReservationsf1 = flight1ReservationSet.getInt("count");
-      flight1ReservationSet.close();
-      if (desiredItinerary.f1.capacity <= numReservationsf1) {
-        return "Booking failed\n";
-      }
-
-      if (desiredItinerary.numFlights == 2) {
-        String checkFlight2Reservations = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R WHERE R.fid2 = ? ;";
-        PreparedStatement flight2ReservationStatement = conn.prepareStatement(checkFlight2Reservations);
-        flight2ReservationStatement.setInt(1, desiredItinerary.f2.fid);
-        ResultSet flight2ReservationSet = flight2ReservationStatement.executeQuery();
-        flight2ReservationSet.next();
-        int numReservationsf2 = flight2ReservationSet.getInt("count");
-        flight2ReservationSet.close();
-        if (desiredItinerary.f2.capacity <= numReservationsf2) {
-          return "Booking failed\n";
-        }
-      }
+      
+      // if (desiredItinerary.numFlights == 2) {
+      // String checkFlight2Reservations = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R WHERE R.fid2 = ? ;";
+      // PreparedStatement flight2ReservationStatement = conn.prepareStatement(checkFlight2Reservations);
+      // flight2ReservationStatement.setInt(1, desiredItinerary.f2.fid);
+      // }
 
       int flightDay = desiredItinerary.f1.dayOfMonth;
       String checkReservationDay = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R, Flights as F WHERE " +
@@ -346,20 +394,59 @@ public class Query extends QueryAbstract {
       PreparedStatement reservationCheckStatement = conn.prepareStatement(checkReservationDay);
       reservationCheckStatement.setInt(1, flightDay);
       reservationCheckStatement.setString(2, currentUser);
+      
+      String checkNumReservations = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R;";
+      PreparedStatement numReservationsStatement = conn.prepareStatement(checkNumReservations);
+
+      conn.setAutoCommit(false);
+      ResultSet flight1ReservationSet = flight1ReservationStatement.executeQuery();
+      flight1ReservationSet.next();
+      int numReservationsf1 = flight1ReservationSet.getInt("count");
+      flight1ReservationSet.close();
+      
+      if (desiredItinerary.f1.capacity <= numReservationsf1) {
+      //  conn.rollback();
+      conn.rollback();
+
+        conn.setAutoCommit(true);
+        return "Booking failed\n";
+      }
+
+      if (desiredItinerary.numFlights == 2) {
+        String checkFlight2Reservations = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R WHERE R.fid2 = ? ;";
+      PreparedStatement flight2ReservationStatement = conn.prepareStatement(checkFlight2Reservations);
+      flight2ReservationStatement.setInt(1, desiredItinerary.f2.fid);
+        ResultSet flight2ReservationSet = flight2ReservationStatement.executeQuery();
+        flight2ReservationSet.next();
+        int numReservationsf2 = flight2ReservationSet.getInt("count");
+        flight2ReservationSet.close();
+        if (desiredItinerary.f2.capacity <= numReservationsf2) {
+          conn.rollback();
+          conn.setAutoCommit(true);
+          return "Booking failed\n";
+        }
+      }
+
+      
       ResultSet numReservationsOnDaySet = reservationCheckStatement.executeQuery();
       numReservationsOnDaySet.next();
       int numReservations = numReservationsOnDaySet.getInt("count");
       numReservationsOnDaySet.close();
       if (numReservations != 0) {
+        conn.rollback();
+        conn.setAutoCommit(true);
         return "You cannot book two flights in the same day\n";
       }
 
-      String checkNumReservations = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R;";
-      PreparedStatement numReservationsStatement = conn.prepareStatement(checkNumReservations);
+
       ResultSet numUserReservationsSet = numReservationsStatement.executeQuery();
       numUserReservationsSet.next();
       int reservationIndex = numUserReservationsSet.getInt("count") + 1;
       numUserReservationsSet.close();
+      // conn.commit();
+      // conn.setAutoCommit(true);
+      
+      
       String createReservation = "INSERT INTO RESERVATIONS_ayush123 VALUES( ? , ? , ? , ? , ? );";
       PreparedStatement createReservationStatement = conn.prepareStatement(createReservation);
       createReservationStatement.setInt(1, reservationIndex);
@@ -371,10 +458,22 @@ public class Query extends QueryAbstract {
       } else {
         createReservationStatement.setInt(5, desiredItinerary.f2.fid);
       }
+
+      // conn.setAutoCommit(false);
       createReservationStatement.executeUpdate();
+      conn.commit();
+      conn.setAutoCommit(true);
       return "Booked flight(s), reservation ID: " + reservationIndex + "\n";
-    } catch (Exception e) {
-      return "Booking failed\n";
+    } catch (SQLException e) {
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+     //   return transaction_book(itineraryId);
+     return "Booking failed\n";
+
+      } catch (SQLException e1) {
+        return "Booking failed\n";
+      }
     }
   }
 
@@ -399,6 +498,7 @@ public class Query extends QueryAbstract {
       return "Cannot pay, not logged in\n";
     }
     try {
+      conn.setAutoCommit(false);
       String verifyReservation = "SELECT COUNT(R.id) as count FROM RESERVATIONS_ayush123 as R WHERE R.id = ? AND R.username = ? AND R.ispaid = ?;";
       PreparedStatement verifyReservationStatement = conn.prepareStatement(verifyReservation);
       verifyReservationStatement.setInt(1, reservationId);
@@ -409,6 +509,8 @@ public class Query extends QueryAbstract {
       int reservationExists = reservationVerificationSet.getInt("count");
       reservationVerificationSet.close();
       if (reservationExists == 0) {
+        conn.rollback();
+        conn.setAutoCommit(true);
         return "Cannot find unpaid reservation " + reservationId + " under user: " + currentUser + "\n";
       }
       // get flights
@@ -446,6 +548,8 @@ public class Query extends QueryAbstract {
       int userBalance = userBalanceSet.getInt("balance");
       userBalanceSet.close();
       if (userBalance < itineraryCost) {
+        conn.rollback();
+        conn.setAutoCommit(true);
         return "User has only " + userBalance + " in account but itinerary costs " + itineraryCost + "\n";
       }
 
@@ -463,9 +567,17 @@ public class Query extends QueryAbstract {
       updateReservationPaymentStatement.setInt(2, reservationId);
       updateReservationPaymentStatement.executeUpdate();
 
+      conn.commit();
+      conn.setAutoCommit(true);
       return "Paid reservation: " + reservationId + " remaining balance: " + userBalance + "\n";
     } catch (SQLException e) {
-      return "Failed to pay for reservation " + reservationId + "\n";
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+        return "Failed to pay for reservation " + reservationId + "\n";
+      } catch (SQLException ex) {
+        return "Failed to pay for reservation " + reservationId + "\n";
+      }
     }
   }
 
@@ -495,17 +607,25 @@ public class Query extends QueryAbstract {
       String getNumReservations = "SELECT count(id) as count FROM RESERVATIONS_ayush123 WHERE username = ? ;";
       PreparedStatement getNumReservationsStatement = conn.prepareStatement(getNumReservations);
       getNumReservationsStatement.setString(1, currentUser);
+
+      String getReservations = "SELECT id, ispaid, fid1, fid2 FROM RESERVATIONS_ayush123 WHERE username = ? ORDER BY id;";
+      PreparedStatement getReservationsStatement = conn.prepareStatement(getReservations);
+      getReservationsStatement.setString(1, currentUser);
+
+
+      conn.setAutoCommit(false);
+
       ResultSet numReservationsSet = getNumReservationsStatement.executeQuery();
       numReservationsSet.next();
       int numReservations = numReservationsSet.getInt("count");
       numReservationsSet.close();
       if (numReservations == 0) {
+        // throw new SQLException("No reservations found\n");
+        conn.rollback();
+        conn.setAutoCommit(true);
         return "No reservations found\n";
       }
 
-      String getReservations = "SELECT id, ispaid, fid1, fid2 FROM RESERVATIONS_ayush123 WHERE username = ? ORDER BY id;";
-      PreparedStatement getReservationsStatement = conn.prepareStatement(getReservations);
-      getReservationsStatement.setString(1, currentUser);
       ResultSet userReservations = getReservationsStatement.executeQuery();
       String reservations = "";
       while (userReservations.next()) {
@@ -513,14 +633,24 @@ public class Query extends QueryAbstract {
         int fid2 = userReservations.getInt("fid2");
         int reservationId = userReservations.getInt("id");
         int ispaid = userReservations.getInt("ispaid");
+        // read only so these two are fine and no possibility of writing to Flights
         Flight flight1 = getFlight(fid1);
         Flight flight2 = getFlight(fid2);
+
         reservations += printReservation(flight1, flight2, reservationId, ispaid);
       }
       userReservations.close();
+      conn.commit();
+      conn.setAutoCommit(true);
       return reservations;
-    } catch(Exception e) {
-      return "Failed to retrieve reservations\n";
+    } catch(SQLException e) {
+      try {
+        conn.rollback();
+        conn.setAutoCommit(true);
+        return "Failed to retrieve reservations\n";
+      } catch (SQLException e1) {
+        return "Failed to retrieve reservations\n";
+      }
     }
   }
 
